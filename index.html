@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="PT-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bot de Resgate - Integrado em HTML</title>
+    {/* Tailwind CSS CDN for styling */}
+    <script src="https://cdn.tailwindcss.com"></script>
+    {/* Inter font */}
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+    </style>
+
+    {/* Firebase Libraries from CDN (Compatibility versions for global access) */}
+    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore-compat.js"></script>
+
+</head>
+<body>
+    <div id="root">
+        {/* O seu aplicativo React será montado aqui */}
+    </div>
+
+    {/* React and ReactDOM libraries from CDN */}
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+    {/* Babel for JSX transformation in browser (for development only) */}
+    {/* In a real production environment, you would pre-compile your React code */}
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <script type="text/babel">
+        // Import React hooks from the global React object
+        const { useState, useEffect } = React;
+
+        // Main App component
+        const App = () => {
+            // State variables for new form fields
+            const [fullName, setFullName] = useState(''); // Existing
+            const [endorsementQuantity, setEndorsementQuantity] = useState(''); // New
+            const [registrationDate, setRegistrationDate] = useState(''); // New
+            const [birthDateTime, setBirthDateTime] = useState(''); // New
+            const [affiliation1, setAffiliation1] = useState(''); // Existing (Father's Name)
+            const [affiliation2, setAffiliation2] = useState(''); // Existing (Mother's Name)
+            const [profession, setProfession] = useState(''); // Single profession field
+            const [parentResidences, setParentResidences] = useState(''); // Combined parents' residences
+            const [nationality, setNationality] = useState(''); // Existing
+            const [naturality, setNaturality] = useState(''); // New: Naturality (city/state of birth)
+            const [locationType, setLocationType] = useState(''); // Existing
+            const [locationAddress, setLocationAddress] = useState(''); // Existing
+
+            // State for the selected image file (or image converted from PDF)
+            const [selectedImage, setSelectedImage] = useState(null);
+            // State for image preview URL
+            const [imagePreviewUrl, setImagePreviewUrl] = useState('');
+            // Loading state for API calls and PDF processing
+            const [isLoading, setIsLoading] = useState(false);
+            // Error message state
+            const [errorMessage, setErrorMessage] = useState('');
+
+            // Firebase configuration and initialization (required for Canvas environment)
+            const [db, setDb] = useState(null);
+            const [auth, setAuth] = useState(null);
+            const [userId, setUserId] = useState(null);
+            const [isAuthReady, setIsAuthReady] = useState(false);
+
+            // Initialize Firebase and set up auth listener
+            useEffect(() => {
+                const initializeFirebase = async () => {
+                    try {
+                        // Ensure __firebase_config is available globally
+                        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+
+                        // Check if firebase object is available globally
+                        if (firebaseConfig && typeof firebase !== 'undefined' && typeof firebase.initializeApp === 'function') {
+                            const app = firebase.initializeApp(firebaseConfig);
+                            const firebaseAuth = firebase.auth(app);
+                            const firestoreDb = firebase.firestore(app);
+
+                            setDb(firestoreDb);
+                            setAuth(firebaseAuth);
+
+                            // Sign in with custom token or anonymously
+                            if (typeof __initial_auth_token !== 'undefined') {
+                                await firebaseAuth.signInWithCustomToken(__initial_auth_token);
+                            } else {
+                                await firebaseAuth.signInAnonymously();
+                            }
+
+                            // Listen for auth state changes
+                            firebaseAuth.onAuthStateChanged((user) => {
+                                if (user) {
+                                    setUserId(user.uid);
+                                } else {
+                                    // If no user, generate a random ID for unauthenticated use (though Canvas usually provides a user)
+                                    setUserId(crypto.randomUUID());
+                                }
+                                setIsAuthReady(true);
+                            });
+                        } else {
+                            console.error("Firebase config or global Firebase object not found. Running without Firebase.");
+                            setErrorMessage("Erro ao inicializar o Firebase. Tente novamente.");
+                            setIsAuthReady(true); // Proceed without Firebase if config is missing
+                        }
+                    } catch (error) {
+                        console.error("Error initializing Firebase:", error);
+                        setErrorMessage("Erro ao inicializar o Firebase. Tente novamente.");
+                        setIsAuthReady(true); // Still set to true to allow UI to render
+                    }
+                };
+
+                const loadPdfJs = () => {
+                    // Check if pdfjsLib is already available globally
+                    if (typeof window.pdfjsLib === 'undefined') {
+                        const script = document.createElement('script');
+                        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+                        script.onload = () => {
+                            // Once pdf.min.js is loaded, set the worker source
+                            if (window.pdfjsLib) {
+                                window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+                                console.log('PDF.js core and worker loaded.');
+                            }
+                        };
+                        script.onerror = () => {
+                            console.error('Failed to load pdf.min.js');
+                            setErrorMessage('Erro ao carregar a biblioteca PDF.js. Verifique sua conexão.');
+                        };
+                        document.head.appendChild(script);
+                    } else {
+                        console.log('PDF.js already loaded.');
+                        // Ensure workerSrc is set if it was loaded by previous runs
+                        if (!window.pdfjsLib.GlobalWorkerOptions.workerSrc) {
+                            window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+                        }
+                    }
+                };
+
+                initializeFirebase();
+                loadPdfJs();
+            }, []); // Empty dependency array means this runs once on mount
+
+            // Function to process image for better OCR readability (e.g., adjust contrast/brightness)
+            const processImageForOCR = (imageFile) => {
+                return new Promise((resolve, reject) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        const ctx = canvas.getContext('2d');
+
+                        canvas.width = img.width;
+                        canvas.height = img.height;
+
+                        // Apply filters for better OCR. Example: increase contrast and brightness
+                        // These values might need tuning based on typical document blurriness.
+                        ctx.filter = 'contrast(150%) brightness(120%)'; // Example values for enhancement
+
+                        ctx.drawImage(img, 0, 0);
+
+                        canvas.toBlob((blob) => {
+                            if (blob) {
+                                // Create a new File object from the processed blob
+                                const processedFile = new File([blob], `processed_${imageFile.name}`, { type: 'image/png' });
+                                resolve(processedFile);
+                            } else {
+                                reject(new Error('Falha ao processar a imagem para blob.'));
+                            }
+                        }, 'image/png'); // Output as PNG for better quality
+
+                    };
+                    img.onerror = (error) => reject(new Error('Falha ao carregar a imagem para processamento: ' + error.message));
+                    img.src = URL.createObjectURL(imageFile);
+                });
+            };
+
+            // Handle file selection (now supports PDF and image pre-processing)
+            const handleImageChange = async (event) => {
+                const file = event.target.files[0];
+                if (!file) {
+                    setSelectedImage(null);
+                    setImagePreviewUrl('');
+                    setErrorMessage('');
+                    // Clear all fields
+                    setFullName('');
+                    setEndorsementQuantity('');
+                    setRegistrationDate('');
+                    setBirthDateTime('');
+                    setAffiliation1('');
+                    setAffiliation2('');
+                    setProfession('');
+                    setParentResidences('');
+                    setNationality('');
+                    setNaturality(''); // Clear new field
+                    setLocationType('');
+                    setLocationAddress('');
+                    return;
+                }
+
+                setErrorMessage('');
+                setFullName('');
+                setEndorsementQuantity('');
+                setRegistrationDate('');
+                setBirthDateTime('');
+                setAffiliation1('');
+                setAffiliation2('');
+                setProfession('');
+                setParentResidences('');
+                setNationality('');
+                setNaturality(''); // Clear new field
+                setLocationType('');
+                setLocationAddress('');
+
+                setIsLoading(true); // Start loading for any file processing
+
+                if (file.type === 'application/pdf') {
+                    try {
+                        // Ensure pdfjsLib is available and workerSrc is set
+                        if (typeof window.pdfjsLib === 'undefined' || !window.pdfjsLib.GlobalWorkerOptions.workerSrc) {
+                            setErrorMessage('Aguardando o carregamento da biblioteca PDF.js. Por favor, tente novamente em alguns segundos.');
+                            setIsLoading(false);
+                            return;
+                        }
+
+                        const reader = new FileReader();
+                        reader.onload = async (e) => {
+                            try {
+                                const pdfData = new Uint8Array(e.target.result);
+                                const loadingTask = window.pdfjsLib.getDocument({ data: pdfData });
+                                const pdf = await loadingTask.promise;
+                                const page = await pdf.getPage(1); // Get the first page
+
+                                const viewport = page.getViewport({ scale: 2 }); // Scale for better quality
+                                const canvas = document.createElement('canvas');
+                                const canvasContext = canvas.getContext('2d');
+                                canvas.height = viewport.height;
+                                canvas.width = viewport.width;
+
+                                const renderContext = {
+                                    canvasContext,
+                                    viewport,
+                                };
+                                await page.render(renderContext).promise;
+
+                                // Convert canvas to a File object
+                                const response = await fetch(canvas.toDataURL('image/png'));
+                                const blob = await response.blob();
+                                const imageFile = new File([blob], "pdf_page_1.png", { type: "image/png" });
+
+                                // Process the image before setting it
+                                const processedImageFile = await processImageForOCR(imageFile);
+                                setSelectedImage(processedImageFile);
+                                setImagePreviewUrl(URL.createObjectURL(processedImageFile));
+
+                            } catch (pdfError) {
+                                console.error('Erro ao processar o PDF:', pdfError);
+                                setErrorMessage('Erro ao processar o PDF. Certifique-se de que é um PDF válido e não está corrompido.');
+                            } finally {
+                                setIsLoading(false);
+                            }
+                        };
+                        reader.onerror = (error) => {
+                            console.error('FileReader error:', error);
+                            setErrorMessage('Erro ao ler o arquivo PDF.');
+                            setIsLoading(false);
+                        };
+                        reader.readAsArrayBuffer(file);
+                    } catch (error) {
+                        console.error('Erro geral ao iniciar o processamento do PDF:', error);
+                        setErrorMessage('Ocorreu um erro inesperado ao tentar abrir o PDF.');
+                        setIsLoading(false);
+                    }
+                } else if (file.type.startsWith('image/')) {
+                    try {
+                        const processedImageFile = await processImageForOCR(file); // Process the directly uploaded image
+                        setSelectedImage(processedImageFile); // Corrected: use processedImageFile
+                        setImagePreviewUrl(URL.createObjectURL(processedImageFile));
+                    } catch (imageProcessError) {
+                        console.error('Erro ao processar a imagem:', imageProcessError);
+                        setErrorMessage('Erro ao processar a imagem para melhor leitura.');
+                    } finally {
+                        setIsLoading(false);
+                    }
+                } else {
+                    setErrorMessage('Formato de arquivo não suportado. Por favor, selecione uma imagem ou PDF.');
+                    setSelectedImage(null);
+                    setImagePreviewUrl('');
+                    setIsLoading(false);
+                }
+            };
+
+            // Function to convert file to Base64
+            const toBase64 = (file) => new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = () => resolve(reader.result.split(',')[1]); // Get only the base64 part
+                reader.onerror = error => reject(error);
+            });
+
+            // Function to convert text numbers (e.g., "vinte e um") to digits
+            const textToNumber = (text) => {
+                const numWords = {
+                    'zero': 0, 'um': 1, 'dois': 2, 'três': 3, 'quatro': 4, 'cinco': 5,
+                    'seis': 6, 'sete': 7, 'oito': 8, 'nove': 9, 'dez': 10,
+                    'onze': 11, 'doze': 12, 'treze': 13, 'catorze': 14, 'quinze': 15,
+                    'dezesseis': 16, 'dezessete': 17, 'dezoito': 18, 'dezenove': 19,
+                    'vinte': 20, 'trinta': 30, 'quarenta': 40, 'cinquenta': 50,
+                    'sessenta': 60, 'setenta': 70, 'oitenta': 80, 'noventa': 90,
+                    'cem': 100, 'cento': 100, 'duzentos': 200, 'trezentos': 300,
+                    'quatrocentos': 400, 'quinhentos': 500, 'seiscentos': 600, 'setecentos': 700,
+                    'oitocentos': 800, 'novecentos': 900,
+                    'mil': 1000, 'milhão': 1000000, 'bilhão': 1000000000 // Added larger scales for robustness
+                };
+
+                let total = 0;
+                let currentChunk = 0;
+                const words = text.toLowerCase().split(/[\s-]+/).filter(Boolean);
+
+                for (const word of words) {
+                    if (numWords[word] !== undefined) {
+                        const value = numWords[word];
+                        if (value >= 1000) { // Handle thousands, millions, etc.
+                            total += (currentChunk === 0 ? 1 : currentChunk) * value;
+                            currentChunk = 0;
+                        } else if (value >= 100) { // Handle hundreds
+                            currentChunk += value;
+                        } else { // Handle tens and units
+                            currentChunk += value;
+                        }
+                    } else if (word === 'e') {
+                        // 'e' is a connector, ignore
+                    } else {
+                        return NaN; // Invalid word
+                    }
+                }
+                return total + currentChunk;
+            };
+
+            // Function to convert text date (e.g., "dia cinco de junho de dois mil e um") to numeric (e.g., "05/06/2001")
+            const convertTextDateToNumeric = (textDate) => {
+                console.log("[DEBUG] convertTextDateToNumeric input:", textDate);
+                if (!textDate) return '';
+
+                const monthMap = {
+                    'janeiro': '01', 'fevereiro': '02', 'março': '03', 'abril': '04',
+                    'maio': '05', 'junho': '06', 'julho': '07', 'agosto': '08',
+                    'setembro': '09', 'outubro': '10', 'novembro': '11', 'dezembro': '12'
+                };
+
+                // Normalize input string for parsing
+                let cleanedText = textDate.toLowerCase()
+                    .replace(/dia\s+/, '')
+                    .replace(/do\s+mês\s+/, '')
+                    .replace(/\s+de\s+/g, ' ') // Replace " de " with space for easier splitting
+                    .trim();
+
+                const parts = cleanedText.split(/\s+/).filter(Boolean);
+
+                let day = null;
+                let month = null;
+                let year = null;
+
+                let monthWordIndex = -1;
+                for (let i = 0; i < parts.length; i++) {
+                    if (monthMap[parts[i]]) {
+                        monthWordIndex = i;
+                        month = monthMap[parts[i]];
+                        break;
+                    }
+                }
+
+                if (monthWordIndex !== -1) {
+                    // Extract day words (before month) and year words (after month)
+                    const dayWords = parts.slice(0, monthWordIndex);
+                    const yearWords = parts.slice(monthWordIndex + 1);
+
+                    const parsedDay = textToNumber(dayWords.join(' ')); // Join back for textToNumber
+                    const parsedYear = textToNumber(yearWords.join(' ')); // Join back for textToNumber
+
+                    if (!isNaN(parsedDay) && parsedDay > 0 && !isNaN(parsedYear) && parsedYear > 0) {
+                        day = String(parsedDay).padStart(2, '0');
+                        year = String(parsedYear);
+                        const result = `${day}/${month}/${year}`;
+                        console.log("[DEBUG] convertTextDateToNumeric output (parsed):", result);
+                        return result;
+                    }
+                }
+
+                console.warn(`[DEBUG] Falha na conversão de data: "${textDate}". Retornando o texto original.`);
+                return textDate;
+            };
+
+            // Handle data extraction using Gemini API
+            const extractDataFromImage = async () => {
+                if (!selectedImage) {
+                    setErrorMessage('Por favor, selecione uma imagem ou PDF de documento primeiro.');
+                    return;
+                }
+
+                setIsLoading(true);
+                setErrorMessage('');
+
+                try {
+                    const base64ImageData = await toBase64(selectedImage);
+                    // Updated prompt to include naturality
+                    const prompt = `Extraia as seguintes informações deste documento (certidão de nascimento):
+                    - Nome completo da pessoa da certidão
+                    - Quantidade de averbações (se houver, caso contrário, 0)
+                    - Data de registro (esta data vem em letras no início da certidão, por favor, formate-a como 'dia [número por extenso] de [mês por extenso] de [ano por extenso]', por exemplo: 'dia cinco de junho de dois mil e um')
+                    - Data e hora do nascimento
+                    - Nome completo do pai (afiliação 1)
+                    - Nome completo da mãe (afiliação 2)
+                    - Profissão (da pessoa da certidão. Se a profissão da pessoa não estiver explícita, procure pela profissão do pai ou da mãe na seção de afiliação e use-a como a profissão da pessoa da certidão. Se houver mais de uma, escolha a primeira encontrada. Caso contrário, null.)
+                    - Residência dos pais (seja conciso, por exemplo: 'Pai: Rua A, 10, Mãe: Rua B, 20')
+                    - Nacionalidade da pessoa da certidão (se não estiver explícita, baseie-se na nacionalidade dos pais)
+                    - Naturalidade (cidade/estado de nascimento da pessoa da certidão, por exemplo: 'São Paulo/SP'. Se não explícito, use null.)
+                    - Tipo do local e o endereço completo (onde a pessoa nasceu)
+                    Responda no formato JSON com as chaves "nomeCompleto", "quantidadeAverbacoes", "dataRegistro", "dataHoraNascimento", "afiliacao1Pai", "afiliacao2Mae", "profissao", "residenciaPais", "nacionalidade", "naturalidade", "tipoLocalEndereco".
+                    Exemplo: {"nomeCompleto": "Maria da Silva", "quantidadeAverbacoes": "0", "dataRegistro": "dia primeiro de janeiro de dois mil e vinte e quatro", "dataHoraNascimento": "01/01/2000 10:30", "afiliacao1Pai": "João da Silva", "afiliacao2Mae": "Ana Souza", "profissao": "LAVRADOR", "residenciaPais": "Pai: Rua A, 10, Mãe: Rua B, 20", "nacionalidade": "Brasileira", "naturalidade": "Rio de Janeiro/RJ", "tipoLocalEndereco": "Hospital Central, Rua das Flores, 123, Centro, Cidade - UF"}.
+                    Se não conseguir encontrar algum dado, use null para o valor.`;
+
+                    let chatHistory = [];
+                    chatHistory.push({ role: "user", parts: [{ text: prompt }] });
+
+                    const payload = {
+                        contents: [
+                            {
+                                role: "user",
+                                parts: [
+                                    { text: prompt },
+                                    {
+                                        inlineData: {
+                                            mimeType: selectedImage.type,
+                                            data: base64ImageData
+                                        }
+                                    }
+                                ]
+                            }
+                        ],
+                        generationConfig: {
+                            responseMimeType: "application/json",
+                            responseSchema: {
+                                type: "OBJECT",
+                                properties: {
+                                    "nomeCompleto": { "type": "STRING" },
+                                    "quantidadeAverbacoes": { "type": "STRING" },
+                                    "dataRegistro": { "type": "STRING" },
+                                    "dataHoraNascimento": { "type": "STRING" },
+                                    "afiliacao1Pai": { "type": "STRING" },
+                                    "afiliacao2Mae": { "type": "STRING" },
+                                    "profissao": { "type": "STRING" }, // Single profession field
+                                    "residenciaPais": { "type": "STRING" }, // Changed property
+                                    "nacionalidade": { "type": "STRING" },
+                                    "naturalidade": { "type": "STRING" }, // New property
+                                    "tipoLocalEndereco": { "type": "STRING" }
+                                },
+                                "propertyOrdering": [
+                                    "nomeCompleto",
+                                    "quantidadeAverbacoes",
+                                    "dataRegistro",
+                                    "dataHoraNascimento",
+                                    "afiliacao1Pai",
+                                    "afiliacao2Mae",
+                                    "profissao",
+                                    "residenciaPais",
+                                    "nacionalidade",
+                                    "naturalidade", // New property order
+                                    "tipoLocalEndereco"
+                                ]
+                            }
+                        }
+                    };
+
+                    const apiKey = ""; // Canvas will provide this at runtime
+                    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    const result = await response.json();
+
+                    if (result.candidates && result.candidates.length > 0 &&
+                        result.candidates[0].content && result.candidates[0].content.parts &&
+                        result.candidates[0].content.parts.length > 0) {
+                        const jsonString = result.candidates[0].content.parts[0].text;
+                        const parsedData = JSON.parse(jsonString);
+
+                        console.log("[DEBUG] Raw dataRegistro from AI:", parsedData.dataRegistro); // Log raw AI output
+
+                        setFullName(parsedData.nomeCompleto || '');
+                        setEndorsementQuantity(parsedData.quantidadeAverbacoes || '');
+                        // Convert the text date to numeric format here
+                        const convertedDate = convertTextDateToNumeric(parsedData.dataRegistro);
+                        setRegistrationDate(convertedDate || '');
+                        setBirthDateTime(parsedData.dataHoraNascimento || '');
+                        setAffiliation1(parsedData.afiliacao1Pai || '');
+                        setAffiliation2(parsedData.afiliacao2Mae || '');
+                        setProfession(parsedData.profissao || ''); // Set single profession field
+                        setParentResidences(parsedData.residenciaPais || ''); // Set new combined field
+                        setNationality(parsedData.nacionalidade || '');
+                        setNaturality(parsedData.naturalidade || ''); // Set new naturality field
+                        setLocationType(parsedData.tipoLocalEndereco || ''); // Combined type and address
+                    } else {
+                        setErrorMessage('Não foi possível extrair as informações. Tente uma imagem mais clara ou um PDF com melhor qualidade.');
+                    }
+                } catch (error) {
+                    console.error('Erro ao chamar a API Gemini:', error);
+                    setErrorMessage(`Erro ao processar o documento: ${error.message}.`);
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-red-50 to-red-100 flex items-center justify-center p-4 font-sans">
+                    <div className="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-2xl border border-gray-200">
+                        <h1 className="text-3xl font-extrabold text-center text-gray-800 mb-6">
+                            <span className="text-red-700">Bot</span> de Resgate
+                        </h1>
+                        <p className="text-center text-gray-600 mb-8">
+                            Faça o upload de uma foto ou PDF do seu documento para preencher automaticamente os campos.
+                            Para melhores resultados, use imagens nítidas e bem iluminadas.
+                        </p>
+
+                        {/* File Upload Section */}
+                        <div className="mb-6">
+                            <input
+                                type="file"
+                                id="document-upload"
+                                accept="image/*,application/pdf"
+                                onChange={handleImageChange}
+                                className="block w-full text-sm text-gray-900 border border-gray-300 rounded-lg cursor-pointer bg-gray-50 focus:outline-none file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-red-50 file:text-red-700 hover:file:bg-red-100"
+                            />
+                            {imagePreviewUrl && (
+                                <div className="mt-4 text-center">
+                                    <h3 className="text-gray-700 text-sm font-semibold mb-2">Pré-visualização:</h3>
+                                    <img
+                                        src={imagePreviewUrl}
+                                        alt="Pré-visualização do documento"
+                                        className="max-w-full h-auto rounded-lg shadow-md mx-auto border border-gray-300"
+                                        style={{ maxHeight: '300px' }}
+                                    />
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Action Button */}
+                        <div className="mb-8">
+                            <button
+                                onClick={extractDataFromImage}
+                                disabled={!selectedImage || isLoading}
+                                className={`w-full py-3 px-4 rounded-xl font-bold text-white transition duration-300 ease-in-out ${
+                                    !selectedImage || isLoading
+                                        ? 'bg-gray-400 cursor-not-allowed'
+                                        : 'bg-red-700 hover:bg-red-800 focus:outline-none focus:ring-4 focus:ring-red-300 shadow-lg transform hover:scale-105'
+                                }`}
+                            >
+                                {isLoading ? (
+                                    <div className="flex items-center justify-center">
+                                        <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                        </svg>
+                                        Extraindo Dados...
+                                    </div>
+                                ) : (
+                                    'Extrair Dados do Documento'
+                                )}
+                            </button>
+                        </div>
+
+                        {/* Error Message */}
+                        {errorMessage && (
+                            <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-xl relative mb-6" role="alert">
+                                <strong className="font-bold">Erro!</strong>
+                                <span className="block sm:inline"> {errorMessage}</span>
+                            </div>
+                        )}
+
+                        {/* Pre-filled Form Fields - Divided into two columns */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label htmlFor="full-name" className="block text-gray-700 text-sm font-semibold mb-2">
+                                    Nome Completo:
+                                </label>
+                                <input
+                                    type="text"
+                                    id="full-name"
+                                    value={fullName}
+                                    onChange={(e) => setFullName(e.target.value)}
+                                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-red-600 focus:border-red-600 bg-gray-50 text-gray-800"
+                                    placeholder="Nome completo extraído"
+                                    readOnly={isLoading}
+                                />
+                            </div>
+                            <div>
+                                <label htmlFor="endorsement-quantity" className="block text-gray-700 text-sm font-semibold mb-2">
+                                    Quantidade de Averbações:
+                                </label>
+                                <input
+                                    type="text"
+                                    id="endorsement-quantity"
+                                    value={endorsementQuantity}
+                                    onChange={(e) => setEndorsementQuantity(e.target.value)}
+                                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-red-600 focus:border-red-600 bg-gray-50 text-gray-800"
+                                    placeholder="Quantidade de averbações extraída"
+                                    readOnly={isLoading}
+                                />
+                            </div>
+                            <div>
+                                <label htmlFor="registration-date" className="block text-gray-700 text-sm font-semibold mb-2">
+                                    Data de Registro:
+                                </label>
+                                <input
+                                    type="text"
+                                    id="registration-date"
+                                    value={registrationDate}
+                                    onChange={(e) => setRegistrationDate(e.target.value)}
+                                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-red-600 focus:border-red-600 bg-gray-50 text-gray-800"
+                                    placeholder="Data de registro (em números) extraída"
+                                    readOnly={isLoading}
+                                />
+                            </div>
+                            <div>
+                                <label htmlFor="birth-date-time" className="block text-gray-700 text-sm font-semibold mb-2">
+                                    Data e Hora do Nascimento:
+                                </label>
+                                <input
+                                    type="text"
+                                    id="birth-date-time"
+                                    value={birthDateTime}
+                                    onChange={(e) => setBirthDateTime(e.target.value)}
+                                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-red-600 focus:border-red-600 bg-gray-50 text-gray-800"
+                                    placeholder="Data e hora do nascimento extraída"
+                                    readOnly={isLoading}
+                                />
+                            </div>
+                            <div>
+                                <label htmlFor="affiliation-1" className="block text-gray-700 text-sm font-semibold mb-2">
+                                    Afiliação 1 (Nome do Pai):
+                                </label>
+                                <input
+                                    type="text"
+                                    id="affiliation-1"
+                                    value={affiliation1}
+                                    onChange={(e) => setAffiliation1(e.target.value)}
+                                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-red-600 focus:border-red-600 bg-gray-50 text-gray-800"
+                                    placeholder="Nome do pai extraído"
+                                    readOnly={isLoading}
+                                />
+                            </div>
+                            <div>
+                                <label htmlFor="affiliation-2" className="block text-gray-700 text-sm font-semibold mb-2">
+                                    Afiliação 2 (Nome da Mãe):
+                                </label>
+                                <input
+                                    type="text"
+                                    id="affiliation-2"
+                                    value={affiliation2}
+                                    onChange={(e) => setAffiliation2(e.target.value)}
+                                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-red-600 focus:border-red-600 bg-gray-50 text-gray-800"
+                                    placeholder="Nome da mãe extraído"
+                                    readOnly={isLoading}
+                                />
+                            </div>
+                            <div>
+                                <label htmlFor="profession" className="block text-gray-700 text-sm font-semibold mb-2">
+                                    Profissão:
+                                </label>
+                                <input
+                                    type="text"
+                                    id="profession"
+                                    value={profession}
+                                    onChange={(e) => setProfession(e.target.value)}
+                                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-red-600 focus:border-red-600 bg-gray-50 text-gray-800"
+                                    placeholder="Profissão extraída"
+                                    readOnly={isLoading}
+                                />
+                            </div>
+                            <div>
+                                <label htmlFor="parent-residences" className="block text-gray-700 text-sm font-semibold mb-2">
+                                    Residência dos Pais:
+                                </label>
+                                <input
+                                    type="text"
+                                    id="parent-residences"
+                                    value={parentResidences}
+                                    onChange={(e) => setParentResidences(e.target.value)}
+                                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-red-600 focus:border-red-600 bg-gray-50 text-gray-800"
+                                    placeholder="Residência dos pais extraída"
+                                    readOnly={isLoading}
+                                />
+                            </div>
+                            <div>
+                                <label htmlFor="nationality" className="block text-gray-700 text-sm font-semibold mb-2">
+                                    Nacionalidade da Pessoa:
+                                </label>
+                                <input
+                                    type="text"
+                                    id="nationality"
+                                    value={nationality}
+                                    onChange={(e) => setNationality(e.target.value)}
+                                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-red-600 focus:border-red-600 bg-gray-50 text-gray-800"
+                                    placeholder="Nacionalidade extraída"
+                                    readOnly={isLoading}
+                                />
+                            </div>
+                            <div>
+                                <label htmlFor="naturality" className="block text-gray-700 text-sm font-semibold mb-2">
+                                    Naturalidade:
+                                </label>
+                                <input
+                                    type="text"
+                                    id="naturality"
+                                    value={naturality}
+                                    onChange={(e) => setNaturality(e.target.value)}
+                                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-red-600 focus:border-red-600 bg-gray-50 text-gray-800"
+                                    placeholder="Naturalidade (cidade/estado) extraída"
+                                    readOnly={isLoading}
+                                />
+                            </div>
+                            <div>
+                                <label htmlFor="location-type-address" className="block text-gray-700 text-sm font-semibold mb-2">
+                                    Tipo do Local e Endereço:
+                                </label>
+                                <input
+                                    type="text"
+                                    id="location-type-address"
+                                    value={locationType}
+                                    onChange={(e) => setLocationType(e.target.value)}
+                                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-red-600 focus:border-red-600 bg-gray-50 text-gray-800"
+                                    placeholder="Tipo do local e endereço extraídos"
+                                    readOnly={isLoading}
+                                />
+                            </div>
+                        </div>
+
+                        {/* User ID display (for Firebase context) */}
+                        {isAuthReady && userId && (
+                            <div className="mt-6 text-sm text-gray-500 text-center">
+                                ID do Usuário: {userId}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        // Render the React App component into the 'root' div
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
