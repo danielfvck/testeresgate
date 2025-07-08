@@ -57,6 +57,8 @@
             const [selectedImage, setSelectedImage] = useState(null);
             // State for image preview URL
             const [imagePreviewUrl, setImagePreviewUrl] = useState('');
+            // New state for website URL input
+            const [websiteUrl, setWebsiteUrl] = useState('');
             // Loading state for API calls and PDF processing
             const [isLoading, setIsLoading] = useState(false);
             // Error message state
@@ -177,7 +179,7 @@
             };
 
             // Handle file selection (now supports PDF and image pre-processing)
-            const handleImageChange = async (event) => {
+            const handleFileChange = async (event) => {
                 const file = event.target.files[0];
                 if (!file) {
                     setSelectedImage(null);
@@ -193,9 +195,10 @@
                     setProfession('');
                     setParentResidences('');
                     setNationality('');
-                    setNaturality(''); // Clear new field
+                    setNaturality('');
                     setLocationType('');
                     setLocationAddress('');
+                    setWebsiteUrl(''); // Clear URL if file is selected
                     return;
                 }
 
@@ -209,9 +212,10 @@
                 setProfession('');
                 setParentResidences('');
                 setNationality('');
-                setNaturality(''); // Clear new field
+                setNaturality('');
                 setLocationType('');
                 setLocationAddress('');
+                setWebsiteUrl(''); // Clear URL if file is selected
 
                 setIsLoading(true); // Start loading for any file processing
 
@@ -275,7 +279,7 @@
                 } else if (file.type.startsWith('image/')) {
                     try {
                         const processedImageFile = await processImageForOCR(file); // Process the directly uploaded image
-                        setSelectedImage(processedImageFile); // Corrected: use processedImageFile
+                        setSelectedImage(processedImageFile);
                         setImagePreviewUrl(URL.createObjectURL(processedImageFile));
                     } catch (imageProcessError) {
                         console.error('Erro ao processar a imagem:', imageProcessError);
@@ -289,6 +293,27 @@
                     setImagePreviewUrl('');
                     setIsLoading(false);
                 }
+            };
+
+            // Handle URL input change
+            const handleUrlChange = (event) => {
+                setWebsiteUrl(event.target.value);
+                setSelectedImage(null); // Clear selected image if URL is entered
+                setImagePreviewUrl('');
+                setErrorMessage('');
+                // Clear all fields
+                setFullName('');
+                setEndorsementQuantity('');
+                setRegistrationDate('');
+                setBirthDateTime('');
+                setAffiliation1('');
+                setAffiliation2('');
+                setProfession('');
+                setParentResidences('');
+                setNationality('');
+                setNaturality('');
+                setLocationType('');
+                setLocationAddress('');
             };
 
             // Function to convert file to Base64
@@ -392,126 +417,251 @@
                 return textDate;
             };
 
-            // Handle data extraction using Gemini API
-            const extractDataFromImage = async () => {
-                if (!selectedImage) {
-                    setErrorMessage('Por favor, selecione uma imagem ou PDF de documento primeiro.');
-                    return;
-                }
+            // Function to send text content to Gemini API for extraction
+            const sendTextToGemini = async (textContent) => {
+                const prompt = `Extraia as seguintes informações deste texto (que pode ser de uma certidão de nascimento ou documento similar):
+                - Nome completo da pessoa da certidão
+                - Quantidade de averbações (se houver, caso contrário, 0)
+                - Data de registro (esta data vem em letras no início da certidão, por favor, formate-a como 'dia [número por extenso] de [mês por extenso] de [ano por extenso]', por exemplo: 'dia cinco de junho de dois mil e um')
+                - Data e hora do nascimento
+                - Nome completo do pai (afiliação 1)
+                - Nome completo da mãe (afiliação 2)
+                - Profissão (da pessoa da certidão. Se a profissão da pessoa não estiver explícita, procure pela profissão do pai ou da mãe na seção de afiliação e use-a como a profissão da pessoa da certidão. Se houver mais de uma, escolha a primeira encontrada. Caso contrário, null.)
+                - Residência dos pais (seja conciso, por exemplo: 'Pai: Rua A, 10, Mãe: Rua B, 20')
+                - Nacionalidade da pessoa da certidão (se não estiver explícita, baseie-se na nacionalidade dos pais)
+                - Naturalidade (cidade/estado de nascimento da pessoa da certidão, por exemplo: 'São Paulo/SP'. Se não explícito, use null.)
+                - Tipo do local e o endereço completo (onde a pessoa nasceu)
+                Responda no formato JSON com as chaves "nomeCompleto", "quantidadeAverbacoes", "dataRegistro", "dataHoraNascimento", "afiliacao1Pai", "afiliacao2Mae", "profissao", "residenciaPais", "nacionalidade", "naturalidade", "tipoLocalEndereco".
+                Exemplo: {"nomeCompleto": "Maria da Silva", "quantidadeAverbacoes": "0", "dataRegistro": "dia primeiro de janeiro de dois mil e vinte e quatro", "dataHoraNascimento": "01/01/2000 10:30", "afiliacao1Pai": "João da Silva", "afiliacao2Mae": "Ana Souza", "profissao": "LAVRADOR", "residenciaPais": "Pai: Rua A, 10, Mãe: Rua B, 20", "nacionalidade": "Brasileira", "naturalidade": "Rio de Janeiro/RJ", "tipoLocalEndereco": "Hospital Central, Rua das Flores, 123, Centro, Cidade - UF"}.
+                Se não conseguir encontrar algum dado, use null para o valor.`;
 
+                let chatHistory = [];
+                chatHistory.push({ role: "user", parts: [{ text: prompt }] });
+
+                const payload = {
+                    contents: [
+                        {
+                            role: "user",
+                            parts: [
+                                { text: prompt },
+                                { text: textContent } // Send the fetched text content
+                            ]
+                        }
+                    ],
+                    generationConfig: {
+                        responseMimeType: "application/json",
+                        responseSchema: {
+                            type: "OBJECT",
+                            properties: {
+                                "nomeCompleto": { "type": "STRING" },
+                                "quantidadeAverbacoes": { "type": "STRING" },
+                                "dataRegistro": { "type": "STRING" },
+                                "dataHoraNascimento": { "type": "STRING" },
+                                "afiliacao1Pai": { "type": "STRING" },
+                                "afiliacao2Mae": { "type": "STRING" },
+                                "profissao": { "type": "STRING" },
+                                "residenciaPais": { "type": "STRING" },
+                                "nacionalidade": { "type": "STRING" },
+                                "naturalidade": { "type": "STRING" },
+                                "tipoLocalEndereco": { "type": "STRING" }
+                            },
+                            "propertyOrdering": [
+                                "nomeCompleto",
+                                "quantidadeAverbacoes",
+                                "dataRegistro",
+                                "dataHoraNascimento",
+                                "afiliacao1Pai",
+                                "afiliacao2Mae",
+                                "profissao",
+                                "residenciaPais",
+                                "nacionalidade",
+                                "naturalidade",
+                                "tipoLocalEndereco"
+                            ]
+                        }
+                    }
+                };
+
+                const apiKey = ""; // Canvas will provide this at runtime
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const result = await response.json();
+
+                if (result.candidates && result.candidates.length > 0 &&
+                    result.candidates[0].content && result.candidates[0].content.parts &&
+                    result.candidates[0].content.parts.length > 0) {
+                    const jsonString = result.candidates[0].content.parts[0].text;
+                    const parsedData = JSON.parse(jsonString);
+
+                    console.log("[DEBUG] Raw dataRegistro from AI:", parsedData.dataRegistro);
+
+                    setFullName(parsedData.nomeCompleto || '');
+                    setEndorsementQuantity(parsedData.quantidadeAverbacoes || '');
+                    const convertedDate = convertTextDateToNumeric(parsedData.dataRegistro);
+                    setRegistrationDate(convertedDate || '');
+                    setBirthDateTime(parsedData.dataHoraNascimento || '');
+                    setAffiliation1(parsedData.afiliacao1Pai || '');
+                    setAffiliation2(parsedData.afiliacao2Mae || '');
+                    setProfession(parsedData.profissao || '');
+                    setParentResidences(parsedData.residenciaPais || '');
+                    setNationality(parsedData.nacionalidade || '');
+                    setNaturality(parsedData.naturalidade || '');
+                    setLocationType(parsedData.tipoLocalEndereco || '');
+                } else {
+                    setErrorMessage('Não foi possível extrair as informações do texto. Tente outro URL ou um conteúdo mais claro.');
+                }
+            };
+
+            // Main function to trigger data extraction (from image/PDF or URL)
+            const extractData = async () => {
                 setIsLoading(true);
                 setErrorMessage('');
+                // Clear previous results
+                setFullName('');
+                setEndorsementQuantity('');
+                setRegistrationDate('');
+                setBirthDateTime('');
+                setAffiliation1('');
+                setAffiliation2('');
+                setProfession('');
+                setParentResidences('');
+                setNationality('');
+                setNaturality('');
+                setLocationType('');
+                setLocationAddress('');
 
-                try {
-                    const base64ImageData = await toBase64(selectedImage);
-                    // Updated prompt to include naturality
-                    const prompt = `Extraia as seguintes informações deste documento (certidão de nascimento):
-                    - Nome completo da pessoa da certidão
-                    - Quantidade de averbações (se houver, caso contrário, 0)
-                    - Data de registro (esta data vem em letras no início da certidão, por favor, formate-a como 'dia [número por extenso] de [mês por extenso] de [ano por extenso]', por exemplo: 'dia cinco de junho de dois mil e um')
-                    - Data e hora do nascimento
-                    - Nome completo do pai (afiliação 1)
-                    - Nome completo da mãe (afiliação 2)
-                    - Profissão (da pessoa da certidão. Se a profissão da pessoa não estiver explícita, procure pela profissão do pai ou da mãe na seção de afiliação e use-a como a profissão da pessoa da certidão. Se houver mais de uma, escolha a primeira encontrada. Caso contrário, null.)
-                    - Residência dos pais (seja conciso, por exemplo: 'Pai: Rua A, 10, Mãe: Rua B, 20')
-                    - Nacionalidade da pessoa da certidão (se não estiver explícita, baseie-se na nacionalidade dos pais)
-                    - Naturalidade (cidade/estado de nascimento da pessoa da certidão, por exemplo: 'São Paulo/SP'. Se não explícito, use null.)
-                    - Tipo do local e o endereço completo (onde a pessoa nasceu)
-                    Responda no formato JSON com as chaves "nomeCompleto", "quantidadeAverbacoes", "dataRegistro", "dataHoraNascimento", "afiliacao1Pai", "afiliacao2Mae", "profissao", "residenciaPais", "nacionalidade", "naturalidade", "tipoLocalEndereco".
-                    Exemplo: {"nomeCompleto": "Maria da Silva", "quantidadeAverbacoes": "0", "dataRegistro": "dia primeiro de janeiro de dois mil e vinte e quatro", "dataHoraNascimento": "01/01/2000 10:30", "afiliacao1Pai": "João da Silva", "afiliacao2Mae": "Ana Souza", "profissao": "LAVRADOR", "residenciaPais": "Pai: Rua A, 10, Mãe: Rua B, 20", "nacionalidade": "Brasileira", "naturalidade": "Rio de Janeiro/RJ", "tipoLocalEndereco": "Hospital Central, Rua das Flores, 123, Centro, Cidade - UF"}.
-                    Se não conseguir encontrar algum dado, use null para o valor.`;
+                if (selectedImage) {
+                    try {
+                        const base64ImageData = await toBase64(selectedImage);
+                        // Prompt for image-based extraction (same as before)
+                        const prompt = `Extraia as seguintes informações deste documento (certidão de nascimento):
+                        - Nome completo da pessoa da certidão
+                        - Quantidade de averbações (se houver, caso contrário, 0)
+                        - Data de registro (esta data vem em letras no início da certidão, por favor, formate-a como 'dia [número por extenso] de [mês por extenso] de [ano por extenso]', por exemplo: 'dia cinco de junho de dois mil e um')
+                        - Data e hora do nascimento
+                        - Nome completo do pai (afiliação 1)
+                        - Nome completo da mãe (afiliação 2)
+                        - Profissão (da pessoa da certidão. Se a profissão da pessoa não estiver explícita, procure pela profissão do pai ou da mãe na seção de afiliação e use-a como a profissão da pessoa da certidão. Se houver mais de uma, escolha a primeira encontrada. Caso contrário, null.)
+                        - Residência dos pais (seja conciso, por exemplo: 'Pai: Rua A, 10, Mãe: Rua B, 20')
+                        - Nacionalidade da pessoa da certidão (se não estiver explícita, baseie-se na nacionalidade dos pais)
+                        - Naturalidade (cidade/estado de nascimento da pessoa da certidão, por exemplo: 'São Paulo/SP'. Se não explícito, use null.)
+                        - Tipo do local e o endereço completo (onde a pessoa nasceu)
+                        Responda no formato JSON com as chaves "nomeCompleto", "quantidadeAverbacoes", "dataRegistro", "dataHoraNascimento", "afiliacao1Pai", "afiliacao2Mae", "profissao", "residenciaPais", "nacionalidade", "naturalidade", "tipoLocalEndereco".
+                        Exemplo: {"nomeCompleto": "Maria da Silva", "quantidadeAverbacoes": "0", "dataRegistro": "dia primeiro de janeiro de dois mil e vinte e quatro", "dataHoraNascimento": "01/01/2000 10:30", "afiliacao1Pai": "João da Silva", "afiliacao2Mae": "Ana Souza", "profissao": "LAVRADOR", "residenciaPais": "Pai: Rua A, 10, Mãe: Rua B, 20", "nacionalidade": "Brasileira", "naturalidade": "Rio de Janeiro/RJ", "tipoLocalEndereco": "Hospital Central, Rua das Flores, 123, Centro, Cidade - UF"}.
+                        Se não conseguir encontrar algum dado, use null para o valor.`;
 
-                    let chatHistory = [];
-                    chatHistory.push({ role: "user", parts: [{ text: prompt }] });
+                        let chatHistory = [];
+                        chatHistory.push({ role: "user", parts: [{ text: prompt }] });
 
-                    const payload = {
-                        contents: [
-                            {
-                                role: "user",
-                                parts: [
-                                    { text: prompt },
-                                    {
-                                        inlineData: {
-                                            mimeType: selectedImage.type,
-                                            data: base64ImageData
+                        const payload = {
+                            contents: [
+                                {
+                                    role: "user",
+                                    parts: [
+                                        { text: prompt },
+                                        {
+                                            inlineData: {
+                                                mimeType: selectedImage.type,
+                                                data: base64ImageData
+                                            }
                                         }
-                                    }
-                                ]
+                                    ]
+                                }
+                            ],
+                            generationConfig: {
+                                responseMimeType: "application/json",
+                                responseSchema: {
+                                    type: "OBJECT",
+                                    properties: {
+                                        "nomeCompleto": { "type": "STRING" },
+                                        "quantidadeAverbacoes": { "type": "STRING" },
+                                        "dataRegistro": { "type": "STRING" },
+                                        "dataHoraNascimento": { "type": "STRING" },
+                                        "afiliacao1Pai": { "type": "STRING" },
+                                        "afiliacao2Mae": { "type": "STRING" },
+                                        "profissao": { "type": "STRING" },
+                                        "residenciaPais": { "type": "STRING" },
+                                        "nacionalidade": { "type": "STRING" },
+                                        "naturalidade": { "type": "STRING" },
+                                        "tipoLocalEndereco": { "type": "STRING" }
+                                    },
+                                    "propertyOrdering": [
+                                        "nomeCompleto",
+                                        "quantidadeAverbacoes",
+                                        "dataRegistro",
+                                        "dataHoraNascimento",
+                                        "afiliacao1Pai",
+                                        "afiliacao2Mae",
+                                        "profissao",
+                                        "residenciaPais",
+                                        "nacionalidade",
+                                        "naturalidade",
+                                        "tipoLocalEndereco"
+                                    ]
+                                }
                             }
-                        ],
-                        generationConfig: {
-                            responseMimeType: "application/json",
-                            responseSchema: {
-                                type: "OBJECT",
-                                properties: {
-                                    "nomeCompleto": { "type": "STRING" },
-                                    "quantidadeAverbacoes": { "type": "STRING" },
-                                    "dataRegistro": { "type": "STRING" },
-                                    "dataHoraNascimento": { "type": "STRING" },
-                                    "afiliacao1Pai": { "type": "STRING" },
-                                    "afiliacao2Mae": { "type": "STRING" },
-                                    "profissao": { "type": "STRING" }, // Single profession field
-                                    "residenciaPais": { "type": "STRING" }, // Changed property
-                                    "nacionalidade": { "type": "STRING" },
-                                    "naturalidade": { "type": "STRING" }, // New property
-                                    "tipoLocalEndereco": { "type": "STRING" }
-                                },
-                                "propertyOrdering": [
-                                    "nomeCompleto",
-                                    "quantidadeAverbacoes",
-                                    "dataRegistro",
-                                    "dataHoraNascimento",
-                                    "afiliacao1Pai",
-                                    "afiliacao2Mae",
-                                    "profissao",
-                                    "residenciaPais",
-                                    "nacionalidade",
-                                    "naturalidade", // New property order
-                                    "tipoLocalEndereco"
-                                ]
-                            }
+                        };
+
+                        const apiKey = ""; // Canvas will provide this at runtime
+                        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+                        const response = await fetch(apiUrl, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+
+                        const result = await response.json();
+
+                        if (result.candidates && result.candidates.length > 0 &&
+                            result.candidates[0].content && result.candidates[0].content.parts &&
+                            result.candidates[0].content.parts.length > 0) {
+                            const jsonString = result.candidates[0].content.parts[0].text;
+                            const parsedData = JSON.parse(jsonString);
+
+                            setFullName(parsedData.nomeCompleto || '');
+                            setEndorsementQuantity(parsedData.quantidadeAverbacoes || '');
+                            const convertedDate = convertTextDateToNumeric(parsedData.dataRegistro);
+                            setRegistrationDate(convertedDate || '');
+                            setBirthDateTime(parsedData.dataHoraNascimento || '');
+                            setAffiliation1(parsedData.afiliacao1Pai || '');
+                            setAffiliation2(parsedData.afiliacao2Mae || '');
+                            setProfession(parsedData.profissao || '');
+                            setParentResidences(parsedData.residenciaPais || '');
+                            setNationality(parsedData.nacionalidade || '');
+                            setNaturality(parsedData.naturalidade || '');
+                            setLocationType(parsedData.tipoLocalEndereco || '');
+                        } else {
+                            setErrorMessage('Não foi possível extrair as informações da imagem. Tente uma imagem mais clara ou um PDF com melhor qualidade.');
                         }
-                    };
-
-                    const apiKey = ""; // Canvas will provide this at runtime
-                    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-
-                    const response = await fetch(apiUrl, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    });
-
-                    const result = await response.json();
-
-                    if (result.candidates && result.candidates.length > 0 &&
-                        result.candidates[0].content && result.candidates[0].content.parts &&
-                        result.candidates[0].content.parts.length > 0) {
-                        const jsonString = result.candidates[0].content.parts[0].text;
-                        const parsedData = JSON.parse(jsonString);
-
-                        console.log("[DEBUG] Raw dataRegistro from AI:", parsedData.dataRegistro); // Log raw AI output
-
-                        setFullName(parsedData.nomeCompleto || '');
-                        setEndorsementQuantity(parsedData.quantidadeAverbacoes || '');
-                        // Convert the text date to numeric format here
-                        const convertedDate = convertTextDateToNumeric(parsedData.dataRegistro);
-                        setRegistrationDate(convertedDate || '');
-                        setBirthDateTime(parsedData.dataHoraNascimento || '');
-                        setAffiliation1(parsedData.afiliacao1Pai || '');
-                        setAffiliation2(parsedData.afiliacao2Mae || '');
-                        setProfession(parsedData.profissao || ''); // Set single profession field
-                        setParentResidences(parsedData.residenciaPais || ''); // Set new combined field
-                        setNationality(parsedData.nacionalidade || '');
-                        setNaturality(parsedData.naturalidade || ''); // Set new naturality field
-                        setLocationType(parsedData.tipoLocalEndereco || ''); // Combined type and address
-                    } else {
-                        setErrorMessage('Não foi possível extrair as informações. Tente uma imagem mais clara ou um PDF com melhor qualidade.');
+                    } catch (error) {
+                        console.error('Erro ao chamar a API Gemini com imagem:', error);
+                        setErrorMessage(`Erro ao processar a imagem: ${error.message}.`);
+                    } finally {
+                        setIsLoading(false);
                     }
-                } catch (error) {
-                    console.error('Erro ao chamar a API Gemini:', error);
-                    setErrorMessage(`Erro ao processar o documento: ${error.message}.`);
-                } finally {
+                } else if (websiteUrl) {
+                    try {
+                        const response = await fetch(websiteUrl);
+                        if (!response.ok) {
+                            throw new Error(`Erro HTTP: ${response.status} - ${response.statusText}. Verifique o URL ou as políticas CORS do site.`);
+                        }
+                        const textContent = await response.text();
+                        await sendTextToGemini(textContent);
+                    } catch (error) {
+                        console.error('Erro ao buscar o conteúdo do URL:', error);
+                        setErrorMessage(`Erro ao carregar o site: ${error.message}. Alguns sites podem bloquear o acesso devido a políticas de segurança (CORS). Tente salvar a página como PDF/imagem.`);
+                    } finally {
+                        setIsLoading(false);
+                    }
+                } else {
+                    setErrorMessage('Por favor, selecione uma imagem/PDF ou insira um URL para extrair dados.');
                     setIsLoading(false);
                 }
             };
@@ -523,17 +673,20 @@
                             <span className="text-red-700">Bot</span> de Resgate
                         </h1>
                         <p className="text-center text-gray-600 mb-8">
-                            Faça o upload de uma foto ou PDF do seu documento para preencher automaticamente os campos.
+                            Faça o upload de uma foto ou PDF do seu documento, ou insira um link de site para preencher automaticamente os campos.
                             Para melhores resultados, use imagens nítidas e bem iluminadas.
                         </p>
 
                         {/* File Upload Section */}
-                        <div className="mb-6">
+                        <div className="mb-4">
+                            <label htmlFor="document-upload" className="block text-gray-700 text-sm font-semibold mb-2">
+                                Carregar Imagem/PDF:
+                            </label>
                             <input
                                 type="file"
                                 id="document-upload"
                                 accept="image/*,application/pdf"
-                                onChange={handleImageChange}
+                                onChange={handleFileChange}
                                 className="block w-full text-sm text-gray-900 border border-gray-300 rounded-lg cursor-pointer bg-gray-50 focus:outline-none file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-red-50 file:text-red-700 hover:file:bg-red-100"
                             />
                             {imagePreviewUrl && (
@@ -549,13 +702,32 @@
                             )}
                         </div>
 
+                        <div className="mb-6 text-center text-gray-600 font-semibold">
+                            OU
+                        </div>
+
+                        {/* URL Input Section */}
+                        <div className="mb-6">
+                            <label htmlFor="website-url" className="block text-gray-700 text-sm font-semibold mb-2">
+                                Inserir URL do Site:
+                            </label>
+                            <input
+                                type="url"
+                                id="website-url"
+                                value={websiteUrl}
+                                onChange={handleUrlChange}
+                                placeholder="Ex: https://www.exemplo.com/documento.html"
+                                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-red-600 focus:border-red-600 bg-gray-50 text-gray-800"
+                            />
+                        </div>
+
                         {/* Action Button */}
                         <div className="mb-8">
                             <button
-                                onClick={extractDataFromImage}
-                                disabled={!selectedImage || isLoading}
+                                onClick={extractData}
+                                disabled={(!selectedImage && !websiteUrl) || isLoading}
                                 className={`w-full py-3 px-4 rounded-xl font-bold text-white transition duration-300 ease-in-out ${
-                                    !selectedImage || isLoading
+                                    (!selectedImage && !websiteUrl) || isLoading
                                         ? 'bg-gray-400 cursor-not-allowed'
                                         : 'bg-red-700 hover:bg-red-800 focus:outline-none focus:ring-4 focus:ring-red-300 shadow-lg transform hover:scale-105'
                                 }`}
@@ -569,7 +741,7 @@
                                         Extraindo Dados...
                                     </div>
                                 ) : (
-                                    'Extrair Dados do Documento'
+                                    'Extrair Dados do Documento/Site'
                                 )}
                             </button>
                         </div>
